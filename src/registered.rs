@@ -55,7 +55,7 @@ impl Context for Registered {
 }
 
 /// An error that occurred in cryptovalue derivation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivationError {
     /// The provided seed data was invalid. A seed must be between 32 and 252 bytes in length,
     /// inclusive.
@@ -267,7 +267,7 @@ pub fn cryptovalue_from_subpath(
 mod tests {
     use crate::registered::PathElement;
 
-    use super::{cryptovalue_from_subpath, ChildIndex, SecretKey};
+    use super::{cryptovalue_from_subpath, ChildIndex, DerivationError, SecretKey};
 
     #[test]
     fn test_cryptovalue_from_empty_subpath_errors() {
