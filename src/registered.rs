@@ -133,9 +133,7 @@ impl SecretKey {
     /// - `zip_number`: the number of the ZIP defining the application protocol. The corresponding
     ///   hardened index (with empty tag) will be prepended to the `subpath` to obtain the ZIP 32
     ///   path.
-    /// - `subpath`: the path to the desired child element. A non-empty path is required, in order
-    ///   to ensure that the resulting full-width cryptovalue is within the allowed subtree rooted
-    ///   at `m_{context} / zip_number'`.
+    /// - `subpath`: the path to the desired child element.
     pub fn from_subpath(
         context_string: &[u8],
         seed: &[u8],
@@ -147,10 +145,6 @@ impl SecretKey {
         }
         if seed.len() < 32 || seed.len() > 252 {
             return Err(DerivationError::SeedInvalid);
-        }
-        // We can't use NonEmpty because it requires allocation.
-        if subpath.is_empty() {
-            return Err(DerivationError::SubpathEmpty);
         }
 
         let mut xsk = Self::master(context_string, seed)
@@ -235,20 +229,20 @@ impl SecretKey {
 /// may consist of an index and a (possibly empty) tag.
 ///
 /// - `context_string`: an identifier for the context in which this key will be used. It must be
-///   globally unique. Must be no more than 252 bytes in length.
+///   globally unique, non-empty, and no more than 252 bytes in length.
 /// - `seed`: the root seed. Must be between 32 bytes and 252 bytes in length, inclusive.
 /// - `zip_number`: the number of the ZIP defining the application protocol. The corresponding
 ///   hardened index (with empty tag) will be prepended to the `subpath` to obtain the ZIP 32 path.
-/// - `subpath`: the path to the desired chiled element. A non-empty path is required, in order to
-///   ensure that the master key for a given registered derivation is not leaked by invocations of
-///   this method.
+/// - `subpath`: the path to the desired child element. A non-empty path is required, in order
+///   to ensure that the resulting full-width cryptovalue is within the allowed subtree rooted
+///   at `m_{context} / zip_number'`.
 pub fn cryptovalue_from_subpath(
     context_string: &[u8],
     seed: &[u8],
     zip_number: u16,
     subpath: &[PathElement<'_>],
 ) -> Result<[u8; 64], DerivationError> {
-    if context_string.len() > 252 {
+    if context_string.is_empty() || context_string.len() > 252 {
         return Err(DerivationError::ContextStringInvalid);
     }
     if seed.len() < 32 || seed.len() > 252 {
@@ -276,9 +270,11 @@ mod tests {
     use super::{cryptovalue_from_subpath, ChildIndex, SecretKey};
 
     #[test]
-    #[should_panic]
     fn test_cryptovalue_from_empty_subpath_errors() {
-        cryptovalue_from_subpath(&[0], &[0; 32], 32, &[]).unwrap();
+        assert_eq!(
+            cryptovalue_from_subpath(&[0], &[0; 32], 32, &[]),
+            Err(DerivationError::SubpathEmpty),
+        );
     }
 
     struct TestVector {
