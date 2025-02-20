@@ -36,6 +36,8 @@
 //! [ZIP process]: https://zips.z.cash/zip-0000
 //! [`zip32::arbitrary`]: `crate::arbitrary`
 
+use core::fmt::Display;
+
 use zcash_spec::PrfExpand;
 
 use crate::{
@@ -52,6 +54,65 @@ impl Context for Registered {
     const CKD_DOMAIN: HardenedOnlyCkdDomain = PrfExpand::REGISTERED_ZIP32_CHILD;
 }
 
+/// An error that occurred in cryptovalue derivation.
+#[derive(Debug, Clone, Copy)]
+pub enum DerivationError {
+    /// The provided seed data was invalid. A seed must be between 32 and 252 bytes in length,
+    /// inclusive.
+    SeedInvalid,
+    /// The provided context string is invalid; context strings must be no greater than 252 bytes
+    /// in length.
+    ContextStringInvalid,
+    /// The provided subpath was empty; empty subpaths are not permitted by this API as deriving
+    /// at the empty subpath would expose the master key.
+    SubpathEmpty,
+}
+
+impl Display for DerivationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DerivationError::SeedInvalid => {
+                write!(f, "Seed must be between 32 and 252 bytes, inclusive.")
+            }
+            DerivationError::ContextStringInvalid => write!(
+                f,
+                "Context string must be no more than 252 bytes in length."
+            ),
+            DerivationError::SubpathEmpty => write!(
+                f,
+                "ZIP 32 registered key subpaths must have at least one element."
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for DerivationError {}
+
+/// A ZIP 32 registered key derivation path element, consisting of a child index and an
+/// optionally-empty tag value.
+pub struct PathElement<'a> {
+    child_index: ChildIndex,
+    tag: &'a [u8],
+}
+
+impl<'a> PathElement<'a> {
+    /// Constructs a new [`PathElement`] from its constituent parts.
+    pub fn new(child_index: ChildIndex, tag: &'a [u8]) -> Self {
+        Self { child_index, tag }
+    }
+
+    /// Returns the index at which the child key will be derived.
+    pub fn child_index(&self) -> ChildIndex {
+        self.child_index
+    }
+
+    /// Returns the tag that will be used in derivation of the child key.
+    pub fn tag(&self) -> &[u8] {
+        self.tag
+    }
+}
+
 /// A registered extended secret key.
 ///
 /// Defined in [ZIP 32: Registered key derivation][regkd].
@@ -65,30 +126,39 @@ impl SecretKey {
     /// Derives a key for a registered application protocol at the given path from the
     /// given seed. Each path element may consist of an index and (possibly empty) tag.
     ///
-    /// - `zip_number` is the number of the ZIP defining the application protocol.
-    ///   The corresponding hardened index (with empty tag) will be prepended to the
-    ///   `subpath` to obtain the full derivation path.
-    /// - `context_string` is an identifier for the context in which this key will be
-    ///   used. It must be globally unique.
-    ///
-    /// # Panics
-    ///
-    /// Panics if:
-    /// - the context string is empty or longer than 252 bytes.
-    /// - the seed is shorter than 32 bytes or longer than 252 bytes.
+    /// - `context_string`: an identifier for the context in which this key will be used. It must
+    ///   be globally unique. Must be no more than 252 bytes in length.
+    /// - `seed`: the root seed. Must be between 32 bytes and 252 bytes in length, inclusive.
+    /// - `zip_number`: the number of the ZIP defining the application protocol. The corresponding
+    ///   hardened index (with empty tag) will be prepended to the `subpath` to obtain the ZIP 32
+    ///   path.
+    /// - `subpath`: the path to the desired chiled element. A non-empty path is required, in order
+    ///   to ensure that the master key for a given registered derivation is not leaked by
+    ///   invocations of this method.
     pub fn from_subpath(
         context_string: &[u8],
         seed: &[u8],
         zip_number: u16,
-        subpath: &[(ChildIndex, &[u8])],
-    ) -> Self {
+        subpath: &[PathElement<'_>],
+    ) -> Result<Self, DerivationError> {
+        if context_string.len() > 252 {
+            return Err(DerivationError::ContextStringInvalid);
+        }
+        if seed.len() < 32 || seed.len() > 252 {
+            return Err(DerivationError::SeedInvalid);
+        }
+        // We can't use NonEmpty because it requires allocation.
+        if subpath.is_empty() {
+            return Err(DerivationError::SubpathEmpty);
+        }
+
         let mut xsk = Self::master(context_string, seed)
             .derive_child(ChildIndex::hardened(u32::from(zip_number)));
 
-        for (i, tag) in subpath {
-            xsk = xsk.derive_child_with_tag(*i, tag);
+        for elem in subpath {
+            xsk = xsk.derive_child_with_tag(elem.child_index, elem.tag);
         }
-        xsk
+        Ok(xsk)
     }
 
     /// Constructs a key for a registered application protocol from its constituent parts.
@@ -159,49 +229,55 @@ impl SecretKey {
     }
 }
 
-/// Derives a 64-byte cryptovalue (for use as key material for example), for a
-/// registered application protocol at the given non-empty subpath from the given
-/// seed. Each subpath element may consist of an index and (possibly empty) tag.
+/// Derives a 64-byte cryptovalue (for use as key material for example), for a registered
+/// application protocol at the given non-empty subpath from the given seed. Each subpath element
+/// may consist of an index and a (possibly empty) tag.
 ///
-/// - `zip_number` is the number of the ZIP defining the application protocol.
-///   The corresponding hardened index (with empty tag) will be prepended to the
-///   `subpath` to obtain the ZIP 32 path.
-/// - `context_string` is an identifier for the context in which this key will be
-///   used. It must be globally unique.
-///
-/// # Panics
-///
-/// Panics if:
-/// - the context string is empty or longer than 252 bytes.
-/// - the seed is shorter than 32 bytes or longer than 252 bytes.
-/// - the subpath is empty.
+/// - `context_string`: an identifier for the context in which this key will be used. It must be
+///   globally unique. Must be no more than 252 bytes in length.
+/// - `seed`: the root seed. Must be between 32 bytes and 252 bytes in length, inclusive.
+/// - `zip_number`: the number of the ZIP defining the application protocol. The corresponding
+///   hardened index (with empty tag) will be prepended to the `subpath` to obtain the ZIP 32 path.
+/// - `subpath`: the path to the desired chiled element. A non-empty path is required, in order to
+///   ensure that the master key for a given registered derivation is not leaked by invocations of
+///   this method.
 pub fn cryptovalue_from_subpath(
     context_string: &[u8],
     seed: &[u8],
     zip_number: u16,
-    subpath: &[(ChildIndex, &[u8])],
-) -> [u8; 64] {
+    subpath: &[PathElement<'_>],
+) -> Result<[u8; 64], DerivationError> {
+    if context_string.len() > 252 {
+        return Err(DerivationError::ContextStringInvalid);
+    }
+    if seed.len() < 32 || seed.len() > 252 {
+        return Err(DerivationError::SeedInvalid);
+    }
     // We can't use NonEmpty because it requires allocation.
-    assert!(!subpath.is_empty());
+    if subpath.is_empty() {
+        return Err(DerivationError::SubpathEmpty);
+    }
 
     let mut xsk = SecretKey::master(context_string, seed)
         .derive_child(ChildIndex::hardened(u32::from(zip_number)));
 
-    for (i, tag) in subpath.iter().take(subpath.len() - 1) {
-        xsk = xsk.derive_child_with_tag(*i, tag);
+    for elem in subpath.iter().take(subpath.len() - 1) {
+        xsk = xsk.derive_child_with_tag(elem.child_index, elem.tag);
     }
-    let (i, tag) = subpath.last().expect("nonempty");
-    xsk.derive_child_cryptovalue(*i, tag)
+    let elem = subpath.last().expect("nonempty");
+    Ok(xsk.derive_child_cryptovalue(elem.child_index, elem.tag))
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::registered::PathElement;
+
     use super::{cryptovalue_from_subpath, ChildIndex, SecretKey};
 
     #[test]
     #[should_panic]
-    fn test_cryptovalue_from_empty_subpath_panics() {
-        cryptovalue_from_subpath(&[0], &[0; 32], 32, &[]);
+    fn test_cryptovalue_from_empty_subpath_errors() {
+        cryptovalue_from_subpath(&[0], &[0; 32], 32, &[]).unwrap();
     }
 
     struct TestVector {
@@ -325,15 +401,19 @@ mod tests {
             let subpath = tv
                 .subpath
                 .iter()
-                .map(|(i, tag)| (ChildIndex::from_index(*i).expect("hardened"), *tag))
+                .map(|(i, tag)| {
+                    PathElement::new(ChildIndex::from_index(*i).expect("hardened"), *tag)
+                })
                 .collect::<alloc::vec::Vec<_>>();
 
-            let sk = SecretKey::from_subpath(tv.context_string, &tv.seed, tv.zip_number, &subpath);
+            let sk = SecretKey::from_subpath(tv.context_string, &tv.seed, tv.zip_number, &subpath)
+                .unwrap();
             assert_eq!(sk.data(), &tv.sk);
             assert_eq!(sk.chain_code().as_bytes(), &tv.c);
 
             let fw = (!subpath.is_empty()).then(|| {
                 cryptovalue_from_subpath(tv.context_string, &tv.seed, tv.zip_number, &subpath)
+                    .unwrap()
             });
             assert_eq!(&fw, &tv.full_width);
             if let Some(fw) = fw {
