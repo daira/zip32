@@ -165,7 +165,7 @@ impl SecretKey {
 ///
 /// - `zip_number` is the number of the ZIP defining the application protocol.
 ///   The corresponding hardened index (with empty tag) will be prepended to the
-///   `path`.
+///   `subpath` to obtain the ZIP 32 path.
 /// - `context_string` is an identifier for the context in which this key will be
 ///   used. It must be globally unique.
 ///
