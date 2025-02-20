@@ -60,11 +60,12 @@ pub enum DerivationError {
     /// The provided seed data was invalid. A seed must be between 32 and 252 bytes in length,
     /// inclusive.
     SeedInvalid,
-    /// The provided context string is invalid; context strings must be no greater than 252 bytes
-    /// in length.
+    /// The provided context string is invalid; context strings must be non-empty and no greater
+    /// than 252 bytes in length.
     ContextStringInvalid,
-    /// The provided subpath was empty; empty subpaths are not permitted by this API as deriving
-    /// at the empty subpath would expose the master key.
+    /// The provided subpath was empty. Empty subpaths are not permitted by this API, as the
+    /// full-width cryptovalue at the empty subpath would be outside the allowed subtree
+    /// rooted at `m_{context} / zip_number'`.
     SubpathEmpty,
 }
 
@@ -76,11 +77,11 @@ impl Display for DerivationError {
             }
             DerivationError::ContextStringInvalid => write!(
                 f,
-                "Context string must be no more than 252 bytes in length."
+                "Context string must be between 1 and 252 bytes, inclusive."
             ),
             DerivationError::SubpathEmpty => write!(
                 f,
-                "ZIP 32 registered key subpaths must have at least one element."
+                "ZIP 32 registered 64-byte cryptovalue subpaths must have at least one element."
             ),
         }
     }
@@ -127,21 +128,21 @@ impl SecretKey {
     /// given seed. Each path element may consist of an index and (possibly empty) tag.
     ///
     /// - `context_string`: an identifier for the context in which this key will be used. It must
-    ///   be globally unique. Must be no more than 252 bytes in length.
+    ///   be globally unique, non-empty, and no more than 252 bytes in length.
     /// - `seed`: the root seed. Must be between 32 bytes and 252 bytes in length, inclusive.
     /// - `zip_number`: the number of the ZIP defining the application protocol. The corresponding
     ///   hardened index (with empty tag) will be prepended to the `subpath` to obtain the ZIP 32
     ///   path.
-    /// - `subpath`: the path to the desired chiled element. A non-empty path is required, in order
-    ///   to ensure that the master key for a given registered derivation is not leaked by
-    ///   invocations of this method.
+    /// - `subpath`: the path to the desired child element. A non-empty path is required, in order
+    ///   to ensure that the resulting full-width cryptovalue is within the allowed subtree rooted
+    ///   at `m_{context} / zip_number'`.
     pub fn from_subpath(
         context_string: &[u8],
         seed: &[u8],
         zip_number: u16,
         subpath: &[PathElement<'_>],
     ) -> Result<Self, DerivationError> {
-        if context_string.len() > 252 {
+        if context_string.is_empty() || context_string.len() > 252 {
             return Err(DerivationError::ContextStringInvalid);
         }
         if seed.len() < 32 || seed.len() > 252 {
